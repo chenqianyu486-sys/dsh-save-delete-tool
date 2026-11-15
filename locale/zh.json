@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "安全删除",
+    "description": "把文件与目录移入工作区的可恢复隔离区，并在所有 Agent 模式下拒绝常见的不可恢复 Shell 删除与 run_code 程序删除。"
+  }
+}

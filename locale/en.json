@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Safe delete",
+    "description": "Moves files and folders to a recoverable workspace trash, and refuses the common irreversible shell or run_code deletion spellings in every agent preset."
+  }
+}

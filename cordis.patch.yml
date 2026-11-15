@@ -1,0 +1,13 @@
+# dsh-safe-delete-tool bundle layer.
+#
+# One row, process-wide on purpose: the three tools must be visible to every
+# agent preset, because the guard in the same plugin protects every preset's
+# shell and program tools. Registering the tools inside one preset would leave
+# the other presets with an unguarded `rm`.
+#
+# There is deliberately no `config`: the trash location, the protected
+# segments and the guard policy are fixed. A smaller surface is easier to audit
+# and has fewer states to test.
+- insert:
+    - id: safe-delete
+      name: './index.js'
