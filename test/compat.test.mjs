@@ -52,6 +52,6 @@ test('every runtime module named by the manifest exists', () => {
 
 test('CHANGELOG starts with the package version', () => {
   const manifest = JSON.parse(read('package.json'))
-  const changelog = read('CHANGELOG.md')
+  const changelog = read('CHANGELOG.md').replace(/\r\n/g, '\n')
   assert.match(changelog, new RegExp(`^# Changelog\\n\\n## ${manifest.version.replaceAll('.', '\\.')}`))
 })
