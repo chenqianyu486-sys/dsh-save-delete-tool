@@ -14,15 +14,16 @@ publication are separate decisions.
 
 ## GitHub
 
-The local repository is initialized on branch main and tagged v2.0.3. The
-intended remote is:
+The repository is published at:
 
-    https://github.com/chenqianyu486-sys/dsh-save-delete-tool.git
+    https://github.com/chenqianyu486-sys/dsh-save-delete-tool
 
-The remote does not exist yet. Create it, then push:
+main is pushed and the test workflow passes on Ubuntu and Windows for Node
+20/22/24. The v2.0.3 tag is pushed and the release workflow builds the npm
+tarball artifact. To reproduce a fresh checkout:
 
-    git remote add origin https://github.com/chenqianyu486-sys/dsh-save-delete-tool.git
-    git push -u origin main
+    git clone https://github.com/chenqianyu486-sys/dsh-save-delete-tool.git
+    git push origin main
     git push origin v2.0.3
 
 The CI workflows in .github/workflows run on push and pull request. The release
