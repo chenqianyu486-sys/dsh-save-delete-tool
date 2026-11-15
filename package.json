@@ -50,7 +50,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test",
+    "test": "node scripts/test.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "dsh": {
