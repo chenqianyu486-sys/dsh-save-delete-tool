@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { apply } from '../index.js'
 import { analyzeExecution } from '../lib/guard.js'
-import { execution, fakeContext, objectSchema, workspace } from './helpers.mjs'
+import { execution, fakeContext, objectSchema, trySymlink, workspace } from './helpers.mjs'
 
 const pwshSchema = objectSchema({ command: { type: 'string' }, description: { type: 'string' } })
 const codeSchema = objectSchema({ code: { type: 'string' }, description: { type: 'string' } })
@@ -63,6 +63,28 @@ test('refuses a native patch delete', () => {
     undefined,
   )
   assert.equal(added, null)
+
+  const contextOnly = analyzeExecution(
+    execution(
+      'apply_patch',
+      { input: '*** Begin Patch\n*** Update File: README.md\n@@\n *** Delete File: src/old.js\n+updated\n*** End Patch' },
+      schema,
+      process.cwd(),
+    ),
+    undefined,
+  )
+  assert.equal(contextOnly, null)
+
+  const patchParam = analyzeExecution(
+    execution(
+      'apply_patch',
+      { patch: '*** Begin Patch\n*** Delete File: src/old.js\n*** End Patch' },
+      objectSchema({ patch: { type: 'string' } }),
+      process.cwd(),
+    ),
+    undefined,
+  )
+  assert.equal(patchParam?.code, 'PATCH_DELETE')
 })
 
 test('scans every payload of a shell tool, not only `command`', () => {
@@ -165,6 +187,50 @@ test('delete, list and restore work end to end through the tool definitions', as
   }
 })
 
+test('restore through the tool refuses an external item junction', async (t) => {
+  const space = workspace()
+  const outside = workspace()
+  const id = '20260101T000000-deadbeef'
+  try {
+    const items = path.join(space.root, '.dsh', 'trash', 'items')
+    mkdirSync(items, { recursive: true })
+    outside.write('payload', 'outside secret')
+    writeFileSync(
+      path.join(outside.root, 'meta.json'),
+      JSON.stringify({
+        version: 1,
+        id,
+        path: 'stolen.txt',
+        kind: 'file',
+        entries: 0,
+        reason: 'junction probe',
+        sessionId: '',
+        deletedAt: '2026-01-01T00:00:00.000Z',
+        status: 'trashed',
+      }),
+    )
+    if (!trySymlink(outside.root, path.join(items, id), 'dir')) {
+      t.skip('creating symlinks needs Developer Mode or elevation on Windows')
+      return
+    }
+
+    const { ctx, tools } = fakeContext(space.root, { sandboxMode: 'workspace-write' })
+    apply(ctx)
+    await assert.rejects(
+      tools.get('restore_file').execute(
+        { trash_id: id },
+        execution('restore_file', { trash_id: id }, undefined, space.root),
+      ),
+      (error) => error?.code === 'TRASH_ITEM_OUTSIDE_WORKSPACE',
+    )
+    assert.equal(existsSync(path.join(space.root, 'stolen.txt')), false)
+    assert.equal(existsSync(path.join(outside.root, 'payload')), true)
+  } finally {
+    space.dispose()
+    outside.dispose()
+  }
+})
+
 test('a non-recursive directory delete is refused through the tool', async () => {
   const space = workspace()
   try {
@@ -178,6 +244,58 @@ test('a non-recursive directory delete is refused through the tool', async () =>
       ),
       (error) => error?.code === 'RECURSIVE_FLAG_REQUIRED',
     )
+  } finally {
+    space.dispose()
+  }
+})
+
+test('ignores terminal sessionId metadata and supports anyOf schema parameters', () => {
+  const terminal = objectSchema({
+    sessionId: { type: 'string' },
+    text: { type: 'string' },
+    submit: { type: 'boolean' },
+  })
+  assert.equal(
+    analyzeExecution(
+      execution('terminal_send', { sessionId: 'rm', text: 'ls', submit: true }, terminal, process.cwd()),
+      undefined,
+    ),
+    null,
+  )
+
+  const anyOfShell = objectSchema({
+    command: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  })
+  assert.equal(
+    analyzeExecution(execution('custom_shell', { command: 'rm -rf build' }, anyOfShell, process.cwd()), undefined)?.code,
+    'SHELL_DELETE',
+  )
+})
+
+test('reports PROGRAM_TOO_LONG as uninspectable and preserves query/limit in list_trash next-page hint', () => {
+  const space = workspace()
+  try {
+    const { ctx, tools, guards } = fakeContext(space.root)
+    apply(ctx)
+    const denied = guards[0](
+      execution('run_code', { code: `const x = 1; ${'x'.repeat(70_000)}` }, codeSchema, space.root),
+    )
+    assert.equal(denied?.info?.code, 'PROGRAM_TOO_LONG')
+    assert.match(denied.reason, /Blocked a program call the guard could not inspect/)
+
+    const rendered = tools.get('list_trash').output.render(
+      { query: 'src', limit: 2, offset: 0 },
+      {
+        items: [
+          { trash_id: 'id-1', path: 'src/a.js', kind: 'file', entries: 0, deleted_at: '2026-01-01T00:00:00.000Z', reason: '' },
+          { trash_id: 'id-2', path: 'src/b.js', kind: 'file', entries: 0, deleted_at: '2026-01-01T00:00:00.000Z', reason: '' },
+        ],
+        total: 5,
+        trash_total: 5,
+        offset: 0,
+      },
+    )
+    assert.match(rendered[0].text, /list_trash\(\{"query":"src","limit":2,"offset":2\}\)/)
   } finally {
     space.dispose()
   }

@@ -144,3 +144,56 @@ test('a tool failure message carries its stable code', () => {
   assert.equal(error.code, 'PATH_OUTSIDE_WORKSPACE')
   assert.equal(error.message, '[PATH_OUTSIDE_WORKSPACE] Refusing to delete "../x".')
 })
+
+test('tool return values conform to their declared output.schema including session_id', async () => {
+  const space = workspace()
+  try {
+    const { ctx, tools } = fakeContext(space.root, { sandboxMode: 'workspace-write' })
+    apply(ctx)
+    space.write('item.txt', 'data')
+
+    const deleteDef = tools.get('delete_file')
+    const deleted = await deleteDef.execute(
+      { path: 'item.txt', reason: 'contract' },
+      execution('delete_file', { path: 'item.txt' }, undefined, space.root, 'sess-1'),
+    )
+    for (const key of deleteDef.output.schema.required) {
+      assert.notEqual(deleted[key], undefined, `delete_file missing ${key}`)
+    }
+    for (const key of Object.keys(deleted)) {
+      assert.ok(key in deleteDef.output.schema.properties, `delete_file unexpected key ${key}`)
+    }
+
+    const listDef = tools.get('list_trash')
+    const listed = await listDef.execute(
+      {},
+      execution('list_trash', {}, undefined, space.root, 'sess-1'),
+    )
+    for (const key of listDef.output.schema.required) {
+      assert.notEqual(listed[key], undefined, `list_trash missing ${key}`)
+    }
+    assert.equal(listed.items.length, 1)
+    const itemSchema = listDef.output.schema.properties.items.items
+    for (const key of itemSchema.required) {
+      assert.notEqual(listed.items[0][key], undefined, `list_trash item missing ${key}`)
+    }
+    for (const key of Object.keys(listed.items[0])) {
+      assert.ok(key in itemSchema.properties, `list_trash item unexpected key ${key}`)
+    }
+    assert.equal(listed.items[0].session_id, 'sess-1')
+
+    const restoreDef = tools.get('restore_file')
+    const restored = await restoreDef.execute(
+      { trash_id: deleted.trash_id },
+      execution('restore_file', { trash_id: deleted.trash_id }, undefined, space.root, 'sess-1'),
+    )
+    for (const key of restoreDef.output.schema.required) {
+      assert.notEqual(restored[key], undefined, `restore_file missing ${key}`)
+    }
+    for (const key of Object.keys(restored)) {
+      assert.ok(key in restoreDef.output.schema.properties, `restore_file unexpected key ${key}`)
+    }
+  } finally {
+    space.dispose()
+  }
+})

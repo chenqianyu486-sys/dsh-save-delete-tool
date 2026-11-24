@@ -60,7 +60,7 @@ build step.
 
 A successful call returns a `trash_id` plus the undo command. Refusals use
 stable codes such as `RECURSIVE_FLAG_REQUIRED`, `PATH_OUTSIDE_WORKSPACE`,
-`PATH_PROTECTED`, `REFUSE_WORKSPACE_ROOT`, `PATH_IN_TRASH`,
+`PATH_PROTECTED`, `PATH_ALIAS_UNSUPPORTED`, `REFUSE_WORKSPACE_ROOT`, `PATH_IN_TRASH`,
 `WORKSPACE_IS_FILESYSTEM_ROOT`, `SANDBOX_READ_ONLY`,
 `SANDBOX_POLICY_UNAVAILABLE` and `TRASH_SOURCE_REMOVE_FAILED`. A call made with no session working directory is
 refused (`WORKSPACE_UNAVAILABLE`) instead of guessing the Host process
@@ -68,6 +68,10 @@ directory.
 
 Never deletable: the workspace root, any path with a `.git`, `.dsh` or
 `.env` segment, the trash itself, and a workspace that is a filesystem root.
+Windows alternate data streams (`name:stream`), trailing dots or spaces
+(`.git.`, `.env `), and 8.3 short names (`GIT~1`) are refused as
+`PATH_ALIAS_UNSUPPORTED` rather than guessed at (while non-8.3 filenames
+containing `~`, such as `project~2026.txt`, stay allowed).
 
 ### `restore_file`
 
@@ -77,11 +81,16 @@ Never deletable: the workspace root, any path with a `.git`, `.dsh` or
 | `overwrite` | `false` | Move the current occupant into the trash instead of refusing. |
 
 Restore re-validates the stored path, recreates missing parents inside the
-workspace, and rejects a tampered record. It never replaces an existing file
-silently: a file payload is hard-linked into place, so a path taken while the
-restore runs fails with `DESTINATION_EXISTS` and the item stays in the trash.
-With `overwrite: true` the displaced occupant gets its own new `trash_id`, and
-both sides stay recoverable.
+workspace, and rejects a tampered record. It also verifies that `items/<id>` is a
+real directory and `meta.json` is a regular file, so a junction/symlink cannot
+redirect restore outside the workspace. Redirected or malformed items fail with
+`TRASH_ITEM_OUTSIDE_WORKSPACE` / `TRASH_ITEM_INVALID` / `TRASH_ITEM_UNREADABLE`;
+a missing item remains `TRASH_ITEM_NOT_FOUND`. It never replaces an existing
+file silently: a file payload is hard-linked into place, so a path taken while
+the restore runs fails with `DESTINATION_EXISTS` and the item stays in the
+trash. The original file mode is preserved (including the Windows read-only
+attribute). With `overwrite: true` the displaced occupant gets its own new
+`trash_id`, and both sides stay recoverable.
 
 ### `list_trash`
 
@@ -128,7 +137,8 @@ in-process error object.
 deletes (or two DSH processes) cannot overwrite each other's records. A delete
 writes a `pending` record, moves the payload, then rewrites `trashed`; a crash
 in between leaves a `pending` record with a payload, which `list_trash` still
-shows and `restore_file` still accepts.
+shows and `restore_file` still accepts. Restore validates `items/<id>` and
+`meta.json` before reading, so a junction/symlink cannot redirect an item.
 
 Ids look like `20261114T094442123-abcd1234`: millisecond timestamp plus random
 suffix, monotonic within one process, so rapid deletes keep a stable newest-first
@@ -139,12 +149,19 @@ cleans up the partial copy and leaves the source untouched. If the copy succeeds
 but the source cannot be fully removed, the complete copy is kept as a pending
 item and the call reports `TRASH_SOURCE_REMOVE_FAILED` with its `trash_id`. A 1.x trash
 (`manifest.json` plus flat `items/<id>__name` archives) is shown on first
-listing and adopted by the next mutation, so an upgrade does not strand
+listing and adopted by the next mutation. Adoption writes a pending record
+before the move, removes an empty item directory on failure, and repairs a
+payload that landed before its meta write, so an upgrade does not strand
 recoverable files.
+
+`realpath` plus per-component `lstat` rejects path-level symlinks and junctions,
+but cannot prove that a directory is not a Linux bind mount or an equivalent
+physical mount; those mount points and check/use races remain residual risks
+documented in SECURITY #26.
 
 ## The guard
 
-A refusal names the plugin version (`[dsh-safe-delete-tool v2.0.3] …`), so a
+A refusal names the plugin version (`[dsh-safe-delete-tool v2.0.6] …`), so a
 stale module keeps being visible after an upgrade instead of silently guarding
 with old rules.
 
@@ -171,29 +188,40 @@ Refused deletions include:
 - POSIX: `rm`, `rmdir`, `unlink`, `shred`, `srm`, through wrappers such as
   `sudo`, `doas`, `env` (including `env -S`), `command`, `exec`, `nohup`, `nice`, `timeout`,
   `stdbuf`, `setsid`, `busybox`, `wsl`, `chroot`, `xargs`, `parallel`, `watch`;
+  long and separated option values, `nohup --`, `runuser --`, `su --session-command`,
+  and process substitution that can feed a shell are covered;
 - PowerShell: `Remove-Item` and aliases (`rm`, `del`, `erase`, `rd`, `rmdir`,
-  `ri`), including pipelines, `ForEach-Object { ... }`, `& 'rm'`,
-  `Start-Process` launching a shell, and `-EncodedCommand`;
-- cmd: `del`, `erase`, `rd`, `rmdir`, and `cmd /c` payloads;
+  `ri`), `[System.IO.File]::Delete` / `[IO.Directory]::Delete`, instance methods
+  such as `(Get-Item x).Delete()` / `FileInfo.Delete()`, including pipelines,
+  `ForEach-Object { ... }`, `& 'rm'`, `Start-Process` launching a shell, and
+  `-EncodedCommand`;
+- cmd: `del`, `erase`, `rd`, `rmdir`, `cmd /c` payloads, and caret-escaped names
+  such as `d^el`;
 - native patch deletion: `apply_patch` with a `*** Delete File:` hunk;
 - terminal input: `terminal_send` typed shell text, when the optional
   terminal bundle is installed;
-- whole-tree deletion: `find -delete`, `find -exec rm`, `rsync --delete`,
-  `robocopy /MIR|/PURGE`, `git clean -f`, `git rm` (except `--cached`);
+- whole-tree deletion: `find -delete`, `find -exec rm` and wrapper forms such as
+  `find -exec env|sudo|command|busybox|xargs ...`; a dynamic `-exec` command
+  (`$CMD`, `$(...)`) fails closed; `rsync --delete`, `robocopy /MIR|/PURGE`,
+  `git clean -f`, `git rm` (except `--cached`);
 - readable inline payloads: `bash -c`, `sh -c`, `pwsh -Command`, `cmd /c`,
-  `eval`, command substitution and backticks, `python -c` (including
+  `eval`, command-position substitutions and backticks, `python -c` (including
   `from os import remove; remove(...)`), `node -e`, `perl -e`, `ruby -e`,
   `php -r`, `lua -e`. Payloads are analyzed recursively; more than 3 levels
   or 64 KB is refused;
 - a PTC program that calls a bound shell tool with a recognized deleting command
   (`pwsh({ command: "rm -rf build" })`), launches a shell through
   `Start-Process`, or nests `run_code`. Command arguments are read by key;
-  metadata and argv data are not commands.
+  metadata and argv data are not commands. Module aliases (`import`,
+  `require`, `createRequire`, `fs.promises`), method aliases and literal
+  command concatenation fail closed.
 
 **Fail closed**: an undecodable PowerShell `-EncodedCommand`, an unterminated
 quote or heredoc, a shell that reads its program from a pipe or redirection
-(`curl … | bash`, `bash < run.sh`), and a command name built at runtime
-(`$CMD`, `%COMSPEC%`) are all refused.
+(`curl … | bash`, `bash < run.sh`), a process substitution that feeds a shell
+(`bash <(…)`), a command-position `$(...)` / backtick substitution, a dynamic
+`find -exec` command, a PowerShell `scriptblock::Create` payload, and a command
+name built at runtime (`$CMD`, `%COMSPEC%`) are all refused.
 
 **Allowed**: data mentions such as `echo "rm -rf"`,
 `git commit -m "rm -rf"`, `grep -r "rm" docs`, `man rm`, `rm --help`,
@@ -228,20 +256,33 @@ would only add states to test, not make deletion safer.
 ## Development
 
 ```bash
-npm test
+npm run verify
 ```
 
-266 tests cover the jail (relative/absolute/`..`/symlinks/protected/trash,
-including a redirected `items` directory), the trash (delete, dry-run,
-recursive flag, restore of a file and of a directory, overwrite, paging,
-filtering, 1.x migration, parallel deletes), the sandbox gate
-(read-only refusal for delete and restore, dry-run still available, an
-unresolvable policy failing closed), the shell policy (direct commands,
-wrappers, inline payloads, encodings, heredocs, allowed data mentions), the
-program policy (`fs.rm`, `unlink`, `rimraf`, `Deno.remove`, `child_process`,
-`eval`), and the plugin assembly plus four-preset classification through a fake
-Cordis context. Two file-symlink cases skip on Windows when creating a symlink
-needs Developer Mode or elevation.
+`npm run verify` checks syntax across every source/script/test file, validates
+`package.json` and `exports` integrity, runs `npm test` (373 tests), and runs
+`npm run smoke` (all four presets plus a disposable-workspace smoke suite).
+
+The 373 tests cover the jail (relative/absolute/`..`/symlinks/protected/trash,
+Windows ADS, trailing dot/space, and 8.3 aliases, non-8.3 tilde names,
+`\\?\` prefixes, `assertSafeExistingParents`, including a redirected `items`
+directory and a redirected item directory), the trash (delete, dry-run,
+recursive flag, restore of a file and of a directory, overwrite, overwrite
+failure recovery messages, paging, filtering, 1.x migration including failure
+retry/crash repair/tampered paths, parallel deletes, mode preservation,
+dangling symlinks, wrapped OS error codes), the sandbox gate (read-only refusal
+for delete and restore, dry-run still available, an unresolvable policy failing
+closed), the shell policy (direct commands, wrappers with long/separated option
+values, wrapper depth cap, inline payloads, command-position substitutions
+inside wrappers/`find -exec`, process substitution, dynamic `find -exec`,
+`git` global flags, cmd `if`/switches/caret escapes, PowerShell
+backtick escapes/`Delete`/scriptblocks/`Start-Process`, encodings, heredocs,
+allowed data mentions), the program policy (`fs.rm`, `unlink`, `rimraf`,
+`Deno.remove`, static/dynamic imports, destructuring, module/method aliases,
+command concatenation, argv metacharacters, `child_process`, `eval`), and the
+plugin assembly, schema-conforming outputs, plus four-preset classification
+through a fake Cordis context. On Windows, symlink tests skip when creating a
+symlink needs Developer Mode or elevation (or sandbox permission).
 
 Source layout:
 

@@ -1,5 +1,146 @@
 # Changelog
 
+## 2.0.6
+
+Safety, accuracy, and release-verification improvements. Tool names, parameter
+schemas and the trash layout are unchanged.
+
+### Fixed
+
+- **Path jail and Windows aliases.** Added trailing dot/space alias refusal
+  (`.git.`, `.env `), tightened the 8.3 short-name check to true 8.3 shapes so
+  legitimate filenames such as `project~2026.txt` and `backup~1.tar.gz` stay
+  allowed, stripped `\\?\` extended-length prefixes before workspace-relative
+  resolution, refused Win32 `\\.\` device paths, and extracted read-only
+  `assertSafeExistingParents` so restore validates ancestors before checking
+  occupants.
+- **Trash store atomicity and error mapping.** Raw Node filesystem errors in
+  `TrashStore` are mapped into `SafeDeleteError` with stable codes
+  (`PATH_NOT_FOUND`, `PATH_ACCESS_DENIED`, `PATH_BUSY`, `FILESYSTEM_ERROR`)
+  while preserving `EXDEV` and `TRASH_SOURCE_REMOVE_FAILED`. Restore errors
+  after an `overwrite: true` archival now name both the requested `trash_id` and
+  the archived occupant's `replaced_trash_id` instead of falsely saying nothing
+  moved, and `restore_file` passes `sessionId` when archiving occupants.
+  1.x `manifest.json` `trashRelPath` values are constrained to `items/` without
+  aliases or symlink escapes, `placeByCopy` ignores post-rename cleanup errors,
+  and `list()` sorting tolerates missing/non-string `deletedAt` values.
+- **Guard classification and entry point.** `apply_patch` detection no longer
+  false-positives on indented diff context lines (` *** Delete File: ...`) and
+  also inspects `args.patch`; `terminal_send` `sessionId`/`session_id` metadata
+  is ignored; `isStringParameter` recognizes `anyOf`/`oneOf` and string-array
+  parameters; `PROGRAM_TOO_LONG` is reported as uninspectable; `list_trash`
+  declares `session_id` in `output.schema` and preserves `query`/`limit` in its
+  `Next page:` hint.
+- **Shell guard.** Fixed PowerShell backtick-escape command bypasses (``r`m``,
+  ``R`emove-Item``), `command rm -v`, `env -iS`, `xargs --replace`/`--eof`/
+  `--max-lines`, wrapper step-cap fail-closed (`SHELL_TOO_DEEP`), `git` global
+  flags (`-C`, `-c`, `--git-dir`, etc.) and `--cached` after `--`, `find -exec`
+  cursor advancement (`find . -exec echo -delete \;`), multi-argument `eval`/
+  `iex`/`Invoke-Expression`/`cmd /c`/`pwsh -Command`, `cmd` slash-attached
+  switches (`del/f/q`) and `if` condition headers, `Start-Process` flag/path
+  resolution, and command-position `$(...)`/backticks inside wrappers and
+  `find -exec`.
+- **Program guard.** Added static ESM `import` tracking, multi-property
+  destructuring and chained namespace aliases; restricted `.then` namespace
+  matching to `import(...).then(...)`; caught one-sided `+` concatenation and
+  >100 `SHELL_OUT` calls; filtered `child_process` option keys (`cwd`, etc.);
+  separated `exec`/`execSync` from argv-quoted `execFile`/`spawn`/`execa`
+  inspection while keeping case-insensitive `/C` / `-Command` / `-EncodedCommand`
+  inline checks; restricted nested `run_code` inspection to code keys; and
+  guarded `\u{...}` decoding against invalid Unicode code points.
+
+### Engineering & Verification
+
+- Added `scripts/smoke.mjs` (`npm run smoke`) exercising the bundle manifest,
+  all four presets, and the non-GUI `RELEASING.md` matrix in a temp workspace.
+- Added `scripts/verify.mjs` (`npm run verify`) running `node --check`,
+  manifest/exports integrity, the full test suite, and the smoke check.
+- Updated GitHub Actions `test` and `release` workflows to run `npm run verify`
+  and pin release tag matching to `package.json`.
+
+### Tests
+
+- 373 tests covering all path, trash, guard, shell, program, contract, and
+  compatibility additions.
+
+## 2.0.5
+
+P1 follow-up after the 2.0.4 MiniMax-comparison audit. Tool names, schemas and
+the trash layout are unchanged.
+
+### Fixed
+
+- **Windows path aliases.** Deletion and restore refuse NTFS alternate data
+  streams and 8.3 short-name paths (`.git::$INDEX_ALLOCATION`, `GIT~1`), and
+  resolve non-symlink targets through `realpathSync.native` before the
+  protected-segment and trash checks. A short-name alias can no longer move
+  `.git`, `.env` or a trash item.
+- **1.x migration atomicity.** Legacy adoption writes a pending record before
+  moving the archive, removes an empty item directory on failure, repairs a
+  payload that landed before its meta write, and keeps the legacy record
+  visible for retry. The undefined `manifestPath` reference was fixed.
+- **Shell guard wrappers.** Long and separated option values for `sudo`,
+  `xargs`, `stdbuf`, `nice`, `ionice`, `parallel`, `unshare` and related
+  wrappers are parsed; `nohup --`, `runuser ... --`, `su
+  --session-command`, attached `env -S...`, `find -exec` dynamic commands,
+  process substitution, and cmd caret escapes are refused.
+- **PTC program guard.** Deletion methods reached through `import`/
+  `require`/`createRequire` aliases, `fs.promises` aliases and method
+  aliases are recognized; `exec`/bound-shell command concatenation and
+  dynamic templates fail closed; `Deno.removeSync`, Python `os.system`/
+  `subprocess`, `require('vm')` and optional-chaining calls are covered.
+
+### Tests
+
+- 324 tests (322 pass, 2 skipped on Windows): added Windows alias, legacy
+  migration retry/crash, wrapper/process-substitution/find/cmd and PTC
+  alias/concatenation cases.
+
+### Documentation
+
+- SECURITY/README now state the Windows alias refusal, the atomic 1.x
+  migration and the remaining computed-property/script-file limits.
+
+## 2.0.4
+
+Safety follow-up after the 2.0.3 MiniMax-comparison audit. Tool names, schemas
+and the trash layout are unchanged.
+
+### Fixed
+
+- **Item-directory junction.** `restore_file` now verifies that `items/<id>` is
+  a real directory below the real `items/` root, and reads `meta.json` only when
+  it is a regular file. A junction at an item path can no longer move an
+  external payload into the workspace.
+- **Restore permission widening.** The hard-link restore path no longer applies
+  `chmod(0o666)` to the restored inode. POSIX removes the hard link without a
+  chmod; Windows temporarily clears the read-only attribute and restores the
+  captured mode afterwards, including 0444.
+- **Dangling symlinks.** Payload existence checks use `lstat` semantics, so a
+  dangling symlink remains listable and restorable instead of disappearing
+  after a successful delete.
+- **Command-position substitutions.** `$(...)` and backticks that can become
+  the command name are refused as `SHELL_UNINSPECTABLE`; substitutions in data
+  arguments remain allowed.
+- **`find -exec` wrappers.** `find -exec env|sudo|command|busybox|xargs ...` and
+  similar wrapper forms are refused instead of treating the wrapper as safe.
+- **PowerShell object methods.** `(Get-Item x).Delete()` and
+  `FileInfo`/`DirectoryInfo` instance `Delete()` calls are recognized.
+- **Redirected metadata.** A symlinked `meta.json` or 1.x `manifest.json` is
+  not followed.
+
+### Tests
+
+- 286 tests (284 pass, 2 skipped on Windows): added item-junction, redirected
+  metadata, mode-preservation, dangling-symlink, command-substitution,
+  `find -exec` wrapper and PowerShell method coverage.
+
+### Documentation
+
+- Clarified that `realpath` does not prove a path is not a Linux bind mount or
+  equivalent physical mount; mount points and check/use races are listed as
+  residual risks (SECURITY #26).
+
 ## 2.0.3
 
 P2 follow-up after the 2.0.2 release audit. Tool names, schemas, trash layout

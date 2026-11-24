@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { ensureSafeParent, inspectRestorePath, inspectTarget, trashRootFor } from '../lib/paths.js'
+import { assertSafeExistingParents, ensureSafeParent, inspectRestorePath, inspectTarget, trashRootFor } from '../lib/paths.js'
 import { trySymlink, workspace } from './helpers.mjs'
 
 function refused(fn, code) {
@@ -98,6 +98,40 @@ test('refuses protected segments and the trash', () => {
   }
 })
 
+test('refuses Windows 8.3 short-name, trailing dot/space, and ADS paths while allowing non-8.3 tilde names', { skip: process.platform !== 'win32' }, () => {
+  const space = workspace()
+  try {
+    space.write('.git/config', 'x')
+    space.write('normal.txt', 'x')
+    space.write('project~2026.txt', 'x')
+    space.write('backup~1.tar.gz', 'x')
+    refused(() => inspectTarget({ root: space.root, input: 'GIT~1' }), 'PATH_ALIAS_UNSUPPORTED')
+    refused(() => inspectTarget({ root: space.root, input: 'GIT~1/config' }), 'PATH_ALIAS_UNSUPPORTED')
+    refused(() => inspectTarget({ root: space.root, input: '.git::$INDEX_ALLOCATION' }), 'PATH_ALIAS_UNSUPPORTED')
+    refused(() => inspectTarget({ root: space.root, input: '.git.' }), 'PATH_ALIAS_UNSUPPORTED')
+    refused(() => inspectTarget({ root: space.root, input: '.env ' }), 'PATH_ALIAS_UNSUPPORTED')
+    refused(() => inspectTarget({ root: space.root, input: '\\\\.\\C:\\x' }), 'PATH_OUTSIDE_WORKSPACE')
+    assert.equal(inspectTarget({ root: space.root, input: `\\\\?\\${space.write('long-prefix.txt', 'x')}` }).relative, 'long-prefix.txt')
+    refused(
+      () => inspectRestorePath({ root: space.root, storedPath: 'GIT~1/config' }),
+      'TRASH_RECORD_CORRUPT',
+    )
+    refused(
+      () => inspectRestorePath({ root: space.root, storedPath: '.git::$INDEX_ALLOCATION/config' }),
+      'TRASH_RECORD_CORRUPT',
+    )
+    refused(() => inspectRestorePath({ root: space.root, storedPath: '.git./config' }), 'TRASH_RECORD_CORRUPT')
+    refused(() => inspectRestorePath({ root: space.root, storedPath: '.env ' }), 'TRASH_RECORD_CORRUPT')
+    assert.equal(inspectTarget({ root: space.root, input: 'normal.txt' }).relative, 'normal.txt')
+    assert.equal(inspectTarget({ root: space.root, input: 'project~2026.txt' }).relative, 'project~2026.txt')
+    assert.equal(inspectTarget({ root: space.root, input: 'backup~1.tar.gz' }).relative, 'backup~1.tar.gz')
+    assert.equal(inspectRestorePath({ root: space.root, storedPath: 'project~2026.txt' }), path.join(space.root, 'project~2026.txt'))
+    assert.equal(inspectRestorePath({ root: space.root, storedPath: 'backup~1.tar.gz' }), path.join(space.root, 'backup~1.tar.gz'))
+  } finally {
+    space.dispose()
+  }
+})
+
 test('refuses a protected segment reached through a symlinked parent', (t) => {
   const space = workspace()
   try {
@@ -180,5 +214,21 @@ test('ensureSafeParent creates missing directories and refuses an escaping symli
   } finally {
     second.dispose()
     outside.dispose()
+  }
+})
+
+test('assertSafeExistingParents validates existing ancestors without creating directories', () => {
+  const space = workspace()
+  try {
+    assertSafeExistingParents(space.root, path.join(space.root, 'missing', 'nested', 'file.txt'))
+    assert.equal(existsSync(path.join(space.root, 'missing')), false)
+
+    space.write('file-parent', 'not a dir')
+    refused(
+      () => assertSafeExistingParents(space.root, path.join(space.root, 'file-parent', 'child.txt')),
+      'PATH_NOT_DIRECTORY',
+    )
+  } finally {
+    space.dispose()
   }
 })

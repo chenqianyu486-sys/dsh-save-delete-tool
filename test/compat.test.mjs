@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -54,4 +54,29 @@ test('CHANGELOG starts with the package version', () => {
   const manifest = JSON.parse(read('package.json'))
   const changelog = read('CHANGELOG.md').replace(/\r\n/g, '\n')
   assert.match(changelog, new RegExp(`^# Changelog\\n\\n## ${manifest.version.replaceAll('.', '\\.')}`))
+})
+
+test('package.json exports all resolve to existing files', () => {
+  const manifest = JSON.parse(read('package.json'))
+  for (const target of Object.values(manifest.exports ?? {})) {
+    assert.equal(typeof target, 'string')
+    if (target.includes('*')) {
+      const dir = path.join(root, path.dirname(target))
+      const suffix = path.basename(target).replace('*', '')
+      assert.ok(
+        readdirSync(dir).some((name) => name.endsWith(suffix)),
+        `export pattern ${target} matched nothing`,
+      )
+    } else {
+      assert.ok(statSync(path.join(root, target)).isFile(), target)
+    }
+  }
+})
+
+test('README files reference the current package version', () => {
+  const manifest = JSON.parse(read('package.json'))
+  const tag = `v${manifest.version}`
+  for (const file of ['README.md', 'README.zh-CN.md']) {
+    assert.ok(read(file).includes(tag), `${file} must reference ${tag}`)
+  }
 })

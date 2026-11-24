@@ -27,7 +27,7 @@ export const name = 'safe-delete'
 export const inject = ['tools']
 
 /** Kept in sync with package.json by test/contract.test.mjs. */
-export const VERSION = '2.0.3'
+export const VERSION = '2.0.6'
 
 /** One paragraph, kept short because it is paid for on every request. */
 const PROMPT_SECTION = `<safe_delete>
@@ -49,7 +49,8 @@ function denialMessage(found) {
     found.code === 'SHELL_UNINSPECTABLE' ||
     found.code === 'SHELL_TOO_LONG' ||
     found.code === 'SHELL_TOO_DEEP' ||
-    found.code === 'PROGRAM_UNINSPECTABLE'
+    found.code === 'PROGRAM_UNINSPECTABLE' ||
+    found.code === 'PROGRAM_TOO_LONG'
   const what = ambiguous
     ? `a ${found.channel} call the guard could not inspect`
     : `an irreversible ${found.channel} deletion`

@@ -6,8 +6,8 @@ publication are separate decisions.
 
 ## Before publishing
 
-1. Run the tests and inspect the package:
-       npm test
+1. Run the full verification suite and inspect the package:
+       npm run verify
        npm pack --dry-run
 2. Confirm the version in package.json, index.js VERSION and CHANGELOG agree.
 3. Confirm the repository URL in package.json points at the real remote.
@@ -19,16 +19,17 @@ The repository is published at:
     https://github.com/chenqianyu486-sys/dsh-save-delete-tool
 
 main is pushed and the test workflow passes on Ubuntu and Windows for Node
-20/22/24. The v2.0.3 tag is pushed and the release workflow builds the npm
-tarball artifact. To reproduce a fresh checkout:
+20/22/24. The v2.0.3 tag is pushed; the 2.0.4, 2.0.5 and 2.0.6 fixes are in this tree
+but not tagged yet. After review, tag and push the new version:
 
     git clone https://github.com/chenqianyu486-sys/dsh-save-delete-tool.git
     git push origin main
-    git push origin v2.0.3
+    git push origin v2.0.6
 
-The CI workflows in .github/workflows run on push and pull request. The release
-workflow runs on a v* tag and uploads the npm tarball as an artifact. It does
-not publish to npm automatically.
+The CI workflows in .github/workflows run `npm run verify` on push and pull request.
+The release workflow verifies that the `v*` tag matches `package.json`, runs
+`npm run verify`, packs the tarball and uploads it as an artifact. It does not
+publish to npm automatically.
 
 ## Real-host smoke
 
@@ -37,7 +38,11 @@ in a desktop profile and run:
 
 - delete_file -> list_trash -> restore_file on a scratch file;
 - a workspace-write session with a redirected .dsh/trash/items (must refuse);
+- a workspace-write session with a redirected items/<id> (must refuse);
+- a dangling symlink delete -> list_trash -> restore_file (must remain recoverable);
 - a PTC program with pwsh({ command: "Remove-Item ..." }) (must refuse);
+- `delete_file` with a Windows `GIT~1` or `.git::$INDEX_ALLOCATION` target (must refuse);
+- a legacy 1.x trash whose first migration move fails, then retry (must list and restore);
 - a harmless command whose text contains rm (must pass);
 - reload/restart behavior: a stale module must show its version in a refusal.
 

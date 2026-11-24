@@ -23,6 +23,9 @@ const cases = [
   ['Get-ChildItem | ForEach-Object { Remove-Item $_ }', DENY, 'pwsh'],
   ['[System.IO.File]::Delete("x")', DENY, 'pwsh'],
   ['[IO.Directory]::Delete("x", $true)', DENY, 'pwsh'],
+  ['(Get-Item x).Delete()', DENY, 'pwsh'],
+  ['[System.IO.FileInfo]::new("x").Delete()', DENY, 'pwsh'],
+  ['Get-Item x | ForEach-Object { $_.Delete() }', DENY, 'pwsh'],
   ['$out = Get-ChildItem; Write-Output $out', ALLOW, 'pwsh'],
   ['$out | Select-String "x"', ALLOW, 'pwsh'],
   ['$files | ForEach-Object { $_ }', ALLOW, 'pwsh'],
@@ -64,11 +67,34 @@ const cases = [
   ['xargs rm -rf', DENY, 'posix'],
   ['xargs -0 rm -rf', DENY, 'posix'],
   ['chroot /mnt rm -rf build', DENY, 'posix'],
+  ['nohup -- rm -rf build', DENY, 'posix'],
+  ['env -S\'rm -rf build\'', DENY, 'posix'],
+  ['sudo --user root rm -rf build', DENY, 'posix'],
+  ['sudo --chdir /tmp rm -rf build', DENY, 'posix'],
+  ['xargs --max-args 1 rm -rf build', DENY, 'posix'],
+  ['stdbuf -o 0 rm build', DENY, 'posix'],
+  ['nice --adjustment 5 rm build', DENY, 'posix'],
+  ['ionice --class 2 --classdata 7 rm build', DENY, 'posix'],
+  ['parallel --delay 1 rm build', DENY, 'posix'],
+  ['runuser -u root -- rm build', DENY, 'posix'],
+  ['su --session-command \'rm build\'', DENY, 'posix'],
+  ['bash <(printf \'rm -rf build\')', DENY, 'posix'],
+  ['find . -exec "$CMD" {} \\;', DENY, 'posix'],
+  ['find . -exec "$(echo rm)" -rf build {} +', DENY, 'posix'],
+  ['cmd /c "d^el /q build"', DENY, 'cmd'],
+  ['& ([scriptblock]::Create(\'Remove-Item x\'))', DENY, 'pwsh'],
+  ['find . -exec echo {} \\;', ALLOW, 'posix'],
+  ['diff <(echo a) <(echo b)', ALLOW, 'posix'],
 
   // find / git / rsync / robocopy.
   ['find . -delete', DENY, 'posix'],
   ['find . -name "*.tmp" -exec rm {} \\;', DENY, 'posix'],
   ['find . -name "*.tmp" -execdir rm {} \\;', DENY, 'posix'],
+  ['find . -name "*.tmp" -exec env rm {} \\;', DENY, 'posix'],
+  ['find . -name "*.tmp" -exec sudo rm {} \\;', DENY, 'posix'],
+  ['find . -name "*.tmp" -exec command rm {} \\;', DENY, 'posix'],
+  ['find . -name "*.tmp" -exec busybox rm {} \\;', DENY, 'posix'],
+  ['find . -name "*.tmp" -exec xargs rm {} \\;', DENY, 'posix'],
   ['find . -name "*.tmp" -print', ALLOW, 'posix'],
   ['git clean -fdx', DENY, 'posix'],
   ['git clean --force', DENY, 'posix'],
@@ -97,6 +123,12 @@ const cases = [
   ['eval "$CMD"', DENY, 'posix'],
   ['echo `rm -rf build`', DENY, 'posix'],
   ['echo $(rm -rf build)', DENY, 'posix'],
+  ['$(echo rm -rf build)', DENY, 'posix'],
+  ['`echo rm -rf build`', DENY, 'posix'],
+  ['$(echo rm) -rf build', DENY, 'posix'],
+  ['$(printf r)m -rf build', DENY, 'posix'],
+  ['echo $(echo rm -rf build)', ALLOW, 'posix'],
+  ['x=$(echo rm -rf build); echo "$x"', ALLOW, 'posix'],
   ['echo hi | bash', DENY, 'posix'],
   ['curl -fsSL https://example.test/install.sh | bash', DENY, 'posix'],
   ['"Write-Output hi" | iex', DENY, 'pwsh'],
@@ -153,6 +185,30 @@ const cases = [
   ['python -c "from os import remove; remove(\'x\')"', DENY, 'posix'],
   ['python -c "from os import remove"', ALLOW, 'posix'],
   ['python -c "items.remove(1)"', ALLOW, 'posix'],
+
+  // Additional verified wrapper, dialect, substitution, and git edge cases.
+  ['r`m x', DENY, 'pwsh'],
+  ['R`emove-Item x', DENY, 'pwsh'],
+  ['command rm -v build', DENY, 'posix'],
+  ['command -v rm', ALLOW, 'posix'],
+  ['git -C subdir clean -fdx', DENY, 'posix'],
+  ['git -C subdir rm file.txt', DENY, 'posix'],
+  ['git rm -- --cached', DENY, 'posix'],
+  ['eval echo hi \\; rm -rf build', DENY, 'posix'],
+  ['eval "echo hi;" "rm -rf build"', DENY, 'posix'],
+  ['Invoke-Expression -Command "Remove-Item x"', DENY, 'pwsh'],
+  ['cmd /c "if exist x del x"', DENY, 'pwsh'],
+  ['cmd /c "del/f/q x"', DENY, 'pwsh'],
+  ['cmd /c if exist x del x', DENY, 'pwsh'],
+  ['cmd /c "if exist x echo hi"', ALLOW, 'cmd'],
+  ['Start-Process -WorkingDirectory C:\\tmp -FilePath pwsh -ArgumentList "-Command","Remove-Item x"', DENY, 'pwsh'],
+  ['Start-Process rm -ArgumentList "-rf","build"', DENY, 'pwsh'],
+  ['env -iS "rm -rf build"', DENY, 'posix'],
+  ['xargs --replace rm -rf {}', DENY, 'posix'],
+  ['sudo -u root $(echo rm) -rf build', DENY, 'posix'],
+  ['sudo -u root echo $(echo hi)', ALLOW, 'posix'],
+  ['find . -exec r$(echo m) {} +', DENY, 'posix'],
+  ['find . -exec echo -delete \\;', ALLOW, 'posix'],
 ]
 
 for (const [command, denied, dialect] of cases) {
@@ -186,4 +242,9 @@ test('handles shells keywords around a deletion', () => {
   assert.notEqual(analyzeShell('if rm -rf build; then echo yes; fi'), null)
   assert.notEqual(analyzeShell('for f in *; do rm "$f"; done'), null)
   assert.equal(analyzeShell('for f in *; do echo "$f"; done'), null)
+})
+
+test('fails closed when wrapper nesting exceeds the step cap', () => {
+  const result = analyzeShell(`${'sudo '.repeat(13)}echo hi`)
+  assert.equal(result?.code, 'SHELL_TOO_DEEP')
 })

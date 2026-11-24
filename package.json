@@ -1,6 +1,6 @@
 {
   "name": "dsh-safe-delete-tool",
-  "version": "2.0.3",
+  "version": "2.0.6",
   "description": "Recoverable, workspace-jailed file deletion for DeepSeek Harness: a per-item trash behind delete_file / restore_file / list_trash, plus a small schema-shaped guard for shells and run_code in every agent preset.",
   "author": "chenqianyu486 <chenqianyu486@gmail.com>",
   "repository": {
@@ -51,6 +51,8 @@
   },
   "scripts": {
     "test": "node scripts/test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "verify": "node scripts/verify.mjs",
     "pack:check": "npm pack --dry-run"
   },
   "dsh": {
